@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ComfyNode Continuous Flow Edition</title>
+    <style>
+        :root {
+            --bg-color: #0f0f0f;
+            --node-bg: #222222;
+            --node-header: #151515;
+            --text: #eeeeee;
+            --green: #4ade80;
+            --gold: #fbbf24;
+            --blue: #3b82f6;
+            --pink: #f472b6;
+            --error: #ef4444;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            position: absolute;
+            width: 100%; height: 100%;
+            background-image: radial-gradient(circle, #252525 1.5px, transparent 1.5px);
+            background-size: 30px 30px;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0; left: 0;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .node {
+            position: absolute;
+            background: var(--node-bg);
+            border: 2px solid #333;
+            border-radius: 12px;
+            z-index: 2;
+            width: 260px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            transition: border-color 0.4s, box-shadow 0.4s;
+        }
+
+        /* --- OLLAMA PROXY STATES --- */
+        .proxy-active { 
+            border-color: var(--green) !important; 
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.2); 
+        }
+        .proxy-processing { 
+            border-color: var(--blue) !important; 
+            box-shadow: 0 0 30px rgba(59, 130, 246, 0.6); 
+            animation: pulse-border 1s infinite alternate;
+        }
+        .proxy-error { 
+            border-color: var(--error) !important; 
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); 
+        }
+
+        @keyframes pulse-border {
+            from { box-shadow: 0 0 15px rgba(59, 130, 246, 0.4); }
+            to { box-shadow: 0 0 35px rgba(59, 130, 246, 0.8); }
+        }
+
+        .node-header {
+            background: var(--node-header);
+            padding: 12px 16px;
+            font-weight: bold;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            cursor: grab;
+            border-bottom: 1px solid #333;
+            border-radius: 12px 12px 0 0;
+            text-transform: uppercase;
+        }
+
+        .node-content { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+        textarea, select, button, input[type="range"] {
+            background: #0a0a0a;
+            border: 1px solid #444;
+            color: #fff;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            outline: none;
+        }
+
+        button { 
+            background: #333; 
+            cursor: pointer; 
+            font-weight: bold; 
+            transition: 0.3s;
+            border: none;
+        }
+        button:hover { background: var(--green); color: #000; box-shadow: 0 0 15px var(--green); }
+
+        #output-window {
+            background: #000;
+            min-height: 160px;
+            padding: 15px;
+            font-family: 'Consolas', monospace;
+            font-size: 0.9rem;
+            border: 1px solid #222;
+            white-space: pre-wrap;
+            color: var(--green);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .scanline {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(to bottom, transparent, rgba(74, 222, 128, 0.03) 50%, transparent);
+            background-size: 100% 10px;
+            animation: scan 3s linear infinite;
+            pointer-events: none;
+        }
+        @keyframes scan { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
+
+        .socket {
+            width: 12px; height: 12px;
+            background: #444;
+            border-radius: 50%;
+            position: absolute;
+            z-index: 3;
+            border: 2px solid var(--node-bg);
+        }
+        .socket.right { right: -7px; top: 50%; }
+        .socket.left { left: -7px; top: 50%; }
+
+        /* Layout Positions */
+        #node-input { top: 50px; left: 50px; }
+        #node-settings { top: 50px; left: 350px; width: 220px; }
+        #node-proxy { top: 280px; left: 350px; width: 220px; }
+        #node-model { top: 50px; left: 630px; width: 240px; }
+        #node-output { top: 50px; left: 930px; width: 400px; }
+    </style>
+</head>
+<body>
+
+<div id="canvas-container">
+    <canvas id="thread-canvas"></canvas>
+
+    <div class="node" id="node-input">
+        <div class="node-header">Text Input</div>
+        <div class="node-content">
+            <textarea id="prompt-input" rows="4" placeholder="Enter prompt..."></textarea>
+            <button id="send-btn">🚀 SEND</button>
+        </div>
+        <div class="socket right" id="sock-in-out"></div>
+    </div>
+
+    <div class="node" id="node-settings">
+        <div class="node-header">Settings</div>
+        <div class="node-content">
+            <label style="font-size: 0.65rem;">Temperature: <span id="temp-val" style="color:var(--gold)">0.7</span></label>
+            <input type="range" id="temp-range" min="0" max="1" step="0.1" value="0.7">
+        </div>
+        <div class="socket left" id="sock-set-in"></div>
+        <div class="socket right" id="sock-set-out"></div>
+    </div>
+
+    <div class="node" id="node-proxy">
+        <div class="node-header">Ollama Proxy</div>
+        <div class="node-content" style="text-align: center;">
+            <div id="proxy-status-text" style="font-weight: 900; font-size: 0.9rem;">CONNECTING...</div>
+            <div style="font-size: 0.55rem; opacity: 0.4; margin-top: 4px;">SECURE BRIDGE</div>
+        </div>
+        <div class="socket left" id="sock-proxy-in"></div>
+        <div class="socket right" id="sock-proxy-out"></div>
+    </div>
+
+    <div class="node" id="node-model">
+        <div class="node-header">Model Loader</div>
+        <div class="node-content">
+            <select id="model-select"><option>Scanning...</option></select>
+        </div>
+        <div class="socket left" id="sock-model-in"></div>
+        <div class="socket right" id="sock-model-out"></div>
+    </div>
+
+    <div class="node" id="node-output">
+        <div class="node-header">Output Window</div>
+        <div class="node-content">
+            <div id="output-window">
+                <div class="scanline" id="scanline"></div>
+                <span id="output-text">Waiting for input...</span>
+            </div>
+        </div>
+        <div class="socket left" id="sock-out-in"></div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('thread-canvas');
+    const ctx = canvas.getContext('2d');
+    const API_BASE = `http://${window.location.hostname}:8000`;
+    
+    let isProcessing = false;
+    let threadOffset = 0;
+
+    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    window.onresize = resize;
+    resize();
+
+    function setProxyUI(state) {
+        const node = document.getElementById('node-proxy');
+        const txt = document.getElementById('proxy-status-text');
+        const scan = document.getElementById('scanline');
+        node.classList.remove('proxy-active', 'proxy-processing', 'proxy-error');
+        
+        if(state === 'active') {
+            node.classList.add('proxy-active');
+            txt.textContent = "READY"; txt.style.color = 'var(--green)';
+            scan.style.display = 'none';
+        } else if(state === 'processing') {
+            node.classList.add('proxy-processing');
+            txt.textContent = "WAITING FOR RESPONSE"; txt.style.color = 'var(--blue)';
+            scan.style.display = 'block';
+        } else {
+            node.classList.add('proxy-error');
+            txt.textContent = "OFFLINE"; txt.style.color = 'var(--error)';
+            scan.style.display = 'none';
+        }
+    }
+
+    document.getElementById('send-btn').onclick = async () => {
+        const prompt = document.getElementById('prompt-input').value;
+        if(!prompt) return;
+
+        isProcessing = true;
+        setProxyUI('processing');
+        document.getElementById('output-text').textContent = "Waiting for response...";
+        
+        try {
+            const res = await fetch(`${API_BASE}/api/generate`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ model: document.getElementById('model-select').value, prompt, stream: false })
+            });
+            const data = await res.json();
+            document.getElementById('output-text').textContent = data.response;
+        } catch (e) { 
+            setProxyUI('error');
+        } finally {
+            isProcessing = false;
+            if(!document.getElementById('node-proxy').classList.contains('proxy-error')) setProxyUI('active');
+        }
+    };
+
+    function drawThreads() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Define paths with their specific colors
+        const paths = [
+            {from: 'sock-in-out', to: 'sock-set-in', color: '#4ade80'},  // Green
+            {from: 'sock-set-out', to: 'sock-proxy-in', color: '#fbbf24'}, // Gold
+            {from: 'sock-proxy-out', to: 'sock-model-in', color: '#3b82f6'}, // Blue
+            {from: 'sock-model-out', to: 'sock-out-in', color: '#f472b6'}  // Pink
+        ];
+
+        paths.forEach((p, idx) => {
+            const f = document.getElementById(p.from).getBoundingClientRect();
+            const t = document.getElementById(p.to).getBoundingClientRect();
+            const x1 = f.left + 6, y1 = f.top + 6, x2 = t.left + 6, y2 = t.top + 6;
+
+            const curvature = Math.min(Math.abs(x2 - x1) * 0.5, 100);
+
+            // 1. Draw Static Wire Shadow
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.bezierCurveTo(x1 + curvature, y1, x2 - curvature, y2, x2, y2);
+            ctx.strokeStyle = '#111'; ctx.lineWidth = 6; ctx.stroke();
+
+            // 2. Draw Colored Wire
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = isProcessing ? 1.0 : 0.4;
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+
+            // 3. Thread Animation (Dashed Lines)
+            if(isProcessing) {
+                ctx.setLineDash([5, 10]);
+                ctx.lineDashOffset = -threadOffset;
+                ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // 4. CONTINUOUS WHITE DATA BALL (Proxy to Output only)
+            // We only show the data balls for paths index 2 (Proxy->Model) and index 3 (Model->Output)
+            if(isProcessing && idx >= 2) {
+                // We create 2 balls per segment for a continuous stream feel
+                const ballCount = 2;
+                for(let b = 0; b < ballCount; b++) {
+                    const time = ((Date.now() * 0.0012) + (b / ballCount)) % 1;
+                    const inv = 1 - time;
+                    const cx1 = x1 + curvature, cx2 = x2 - curvature;
+                    const px = Math.pow(inv, 3) * x1 + 3 * Math.pow(inv, 2) * time * cx1 + 3 * inv * Math.pow(time, 2) * cx2 + Math.pow(time, 3) * x2;
+                    const py = Math.pow(inv, 3) * y1 + 3 * Math.pow(inv, 2) * time * y1 + 3 * inv * Math.pow(time, 2) * y2 + Math.pow(time, 3) * y2;
+                    
+                    ctx.fillStyle = "#ffffff";
+                    ctx.shadowBlur = 15; ctx.shadowColor = "#ffffff";
+                    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+            }
+        });
+
+        threadOffset += 1.5;
+        requestAnimationFrame(drawThreads);
+    }
+
+    // Draggable Logic
+    document.querySelectorAll('.node-header').forEach(h => {
+        h.onmousedown = (e) => {
+            let n = h.parentElement;
+            let ox = e.clientX - n.offsetLeft, oy = e.clientY - n.offsetTop;
+            document.onmousemove = (me) => {
+                n.style.left = (me.clientX - ox) + 'px';
+                n.style.top = (me.clientY - oy) + 'px';
+            };
+            document.onmouseup = () => document.onmousemove = null;
+        };
+    });
+
+    async function init() {
+        try {
+            const res = await fetch(`${API_BASE}/api/tags`);
+            const data = await res.json();
+            const select = document.getElementById('model-select');
+            select.innerHTML = '';
+            data.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.name; opt.textContent = m.name;
+                select.appendChild(opt);
+            });
+            setProxyUI('active');
+        } catch (e) { setProxyUI('error'); }
+    }
+
+    document.getElementById('temp-range').oninput = (e) => { document.getElementById('temp-val').textContent = e.target.value; };
+
+    init();
+    drawThreads();
+</script>
+</body>
+</html>
