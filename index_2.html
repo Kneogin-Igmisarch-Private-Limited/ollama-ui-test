@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ComfyNode Streaming Edition</title>
+    <style>
+        :root {
+            --bg-color: #0f0f0f;
+            --node-bg: #222222;
+            --node-header: #151515;
+            --text: #eeeeee;
+            --green: #4ade80;
+            --gold: #fbbf24;
+            --blue: #3b82f6;
+            --pink: #f472b6;
+            --error: #ef4444;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            position: absolute;
+            width: 100%; height: 100%;
+            background-image: radial-gradient(circle, #252525 1.5px, transparent 1.5px);
+            background-size: 30px 30px;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0; left: 0;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .node {
+            position: absolute;
+            background: var(--node-bg);
+            border: 2px solid #333;
+            border-radius: 12px;
+            z-index: 2;
+            width: 260px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            transition: border-color 0.4s, box-shadow 0.4s;
+        }
+
+        /* --- OLLAMA PROXY STATES --- */
+        .proxy-active { 
+            border-color: var(--green) !important; 
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.2); 
+        }
+        .proxy-processing { 
+            border-color: var(--blue) !important; 
+            box-shadow: 0 0 30px rgba(59, 130, 246, 0.6); 
+            animation: pulse-border 1s infinite alternate;
+        }
+        .proxy-error { 
+            border-color: var(--error) !important; 
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); 
+        }
+
+        @keyframes pulse-border {
+            from { box-shadow: 0 0 15px rgba(59, 130, 246, 0.4); }
+            to { box-shadow: 0 0 35px rgba(59, 130, 246, 0.8); }
+        }
+
+        .node-header {
+            background: var(--node-header);
+            padding: 12px 16px;
+            font-weight: bold;
+            font-size: 0.75rem;
+            letter-spacing: 1px;
+            cursor: grab;
+            border-bottom: 1px solid #333;
+            border-radius: 12px 12px 0 0;
+            text-transform: uppercase;
+        }
+
+        .node-content { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+        textarea, select, button, input[type="range"] {
+            background: #0a0a0a;
+            border: 1px solid #444;
+            color: #fff;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            outline: none;
+        }
+
+        button { 
+            background: #333; 
+            cursor: pointer; 
+            font-weight: bold; 
+            transition: 0.3s;
+            border: none;
+        }
+        button:hover { background: var(--green); color: #000; box-shadow: 0 0 15px var(--green); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #output-window {
+            background: #000;
+            min-height: 160px;
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 15px;
+            font-family: 'Consolas', monospace;
+            font-size: 0.9rem;
+            border: 1px solid #222;
+            white-space: pre-wrap;
+            color: var(--green);
+            position: relative;
+        }
+
+        .scanline {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(to bottom, transparent, rgba(74, 222, 128, 0.03) 50%, transparent);
+            background-size: 100% 10px;
+            animation: scan 3s linear infinite;
+            pointer-events: none;
+        }
+        @keyframes scan { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
+
+        .socket {
+            width: 12px; height: 12px;
+            background: #444;
+            border-radius: 50%;
+            position: absolute;
+            z-index: 3;
+            border: 2px solid var(--node-bg);
+        }
+        .socket.right { right: -7px; top: 50%; }
+        .socket.left { left: -7px; top: 50%; }
+
+        /* Stream Chunks Display */
+        #stream-chunks {
+            font-size: 0.7rem;
+            color: var(--gold);
+            margin-top: 8px;
+            padding: 8px;
+            background: rgba(251, 191, 36, 0.05);
+            border-radius: 4px;
+            border: 1px solid rgba(251, 191, 36, 0.2);
+            min-height: 20px;
+            font-family: 'Consolas', monospace;
+        }
+
+        .chunk {
+            display: inline-block;
+            margin: 2px;
+            padding: 2px 6px;
+            background: rgba(251, 191, 36, 0.1);
+            border-radius: 3px;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Token counter */
+        #token-counter {
+            font-size: 0.65rem;
+            color: var(--pink);
+            text-align: center;
+            margin-top: 8px;
+            font-weight: bold;
+        }
+
+        /* Layout Positions */
+        #node-input { top: 50px; left: 50px; }
+        #node-settings { top: 50px; left: 350px; width: 220px; }
+        #node-proxy { top: 280px; left: 350px; width: 240px; }
+        #node-model { top: 50px; left: 630px; width: 240px; }
+        #node-output { top: 50px; left: 930px; width: 400px; }
+
+        /* Connection mode toggle */
+        .mode-toggle {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .mode-toggle button {
+            flex: 1;
+            padding: 6px;
+            font-size: 0.7rem;
+        }
+        .mode-toggle button.active {
+            background: var(--green);
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="canvas-container">
+    <canvas id="thread-canvas"></canvas>
+
+    <div class="node" id="node-input">
+        <div class="node-header">Text Input</div>
+        <div class="node-content">
+            <textarea id="prompt-input" rows="4" placeholder="Enter prompt...">Write a short poem about AI</textarea>
+            <div class="mode-toggle">
+                <button id="mode-ws" class="active">WebSocket</button>
+                <button id="mode-http">HTTP Stream</button>
+            </div>
+            <button id="send-btn">🚀 SEND</button>
+        </div>
+        <div class="socket right" id="sock-in-out"></div>
+    </div>
+
+    <div class="node" id="node-settings">
+        <div class="node-header">Settings</div>
+        <div class="node-content">
+            <label style="font-size: 0.65rem;">Temperature: <span id="temp-val" style="color:var(--gold)">0.7</span></label>
+            <input type="range" id="temp-range" min="0" max="1" step="0.1" value="0.7">
+        </div>
+        <div class="socket left" id="sock-set-in"></div>
+        <div class="socket right" id="sock-set-out"></div>
+    </div>
+
+    <div class="node" id="node-proxy">
+        <div class="node-header">Ollama Proxy</div>
+        <div class="node-content" style="text-align: center;">
+            <div id="proxy-status-text" style="font-weight: 900; font-size: 0.9rem;">CONNECTING...</div>
+            <div style="font-size: 0.55rem; opacity: 0.4; margin-top: 4px;">SECURE BRIDGE</div>
+            <div id="stream-chunks"></div>
+            <div id="token-counter"></div>
+        </div>
+        <div class="socket left" id="sock-proxy-in"></div>
+        <div class="socket right" id="sock-proxy-out"></div>
+    </div>
+
+    <div class="node" id="node-model">
+        <div class="node-header">Model Loader</div>
+        <div class="node-content">
+            <select id="model-select"><option>Scanning...</option></select>
+        </div>
+        <div class="socket left" id="sock-model-in"></div>
+        <div class="socket right" id="sock-model-out"></div>
+    </div>
+
+    <div class="node" id="node-output">
+        <div class="node-header">Output Window</div>
+        <div class="node-content">
+            <div id="output-window">
+                <div class="scanline" id="scanline"></div>
+                <span id="output-text">Waiting for input...</span>
+            </div>
+        </div>
+        <div class="socket left" id="sock-out-in"></div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('thread-canvas');
+    const ctx = canvas.getContext('2d');
+    const API_BASE = 'http://127.0.0.1:8000';
+    
+    let isProcessing = false;
+    let threadOffset = 0;
+    let ws = null;
+    let useWebSocket = true;
+    let lastChunks = [];
+    let tokenCount = { in: 0, out: 0 };
+
+    function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    window.onresize = resize;
+    resize();
+
+    function setProxyUI(state) {
+        const node = document.getElementById('node-proxy');
+        const txt = document.getElementById('proxy-status-text');
+        const scan = document.getElementById('scanline');
+        node.classList.remove('proxy-active', 'proxy-processing', 'proxy-error');
+        
+        if(state === 'active') {
+            node.classList.add('proxy-active');
+            txt.textContent = "READY"; txt.style.color = 'var(--green)';
+            scan.style.display = 'none';
+        } else if(state === 'processing') {
+            node.classList.add('proxy-processing');
+            txt.textContent = "STREAMING DATA"; txt.style.color = 'var(--blue)';
+            scan.style.display = 'block';
+        } else {
+            node.classList.add('proxy-error');
+            txt.textContent = "OFFLINE"; txt.style.color = 'var(--error)';
+            scan.style.display = 'none';
+        }
+    }
+
+    function updateStreamChunks(chunk) {
+        lastChunks.push(chunk);
+        if(lastChunks.length > 5) lastChunks.shift();
+        
+        const container = document.getElementById('stream-chunks');
+        container.innerHTML = lastChunks.map(c => `<span class="chunk">${c.slice(0, 10)}</span>`).join(' ▸ ');
+    }
+
+    function updateTokenCounter(inTokens, outTokens) {
+        tokenCount = { in: inTokens, out: outTokens };
+        document.getElementById('token-counter').textContent = `Tokens: ${inTokens} → ${outTokens}`;
+    }
+
+    function initWebSocket() {
+        const wsUrl = API_BASE.replace('http', 'ws') + '/ws';
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = () => {
+            console.log('WebSocket connected');
+            setProxyUI('active');
+        };
+        
+        ws.onerror = () => {
+            console.error('WebSocket error');
+            setProxyUI('error');
+        };
+        
+        ws.onclose = () => {
+            console.log('WebSocket closed');
+            if(!isProcessing) setProxyUI('error');
+        };
+        
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                if(data.response) {
+                    updateStreamChunks(data.response);
+                    const outputEl = document.getElementById('output-text');
+                    outputEl.textContent += data.response;
+                    document.getElementById('output-window').scrollTop = document.getElementById('output-window').scrollHeight;
+                }
+                
+                if(data.done) {
+                    isProcessing = false;
+                    updateTokenCounter(data.prompt_eval_count || 0, data.eval_count || 0);
+                    setTimeout(() => {
+                        setProxyUI('active');
+                        lastChunks = [];
+                        document.getElementById('stream-chunks').innerHTML = '';
+                    }, 2000);
+                }
+            } catch(e) {
+                console.error('Parse error:', e);
+            }
+        };
+    }
+
+    async function sendViaWebSocket() {
+        const prompt = document.getElementById('prompt-input').value;
+        const model = document.getElementById('model-select').value;
+        const temp = parseFloat(document.getElementById('temp-range').value);
+        
+        if(!prompt || !ws || ws.readyState !== WebSocket.OPEN) {
+            alert('WebSocket not connected!');
+            return;
+        }
+
+        isProcessing = true;
+        setProxyUI('processing');
+        document.getElementById('output-text').textContent = '';
+        lastChunks = [];
+        tokenCount = { in: 0, out: 0 };
+        document.getElementById('stream-chunks').innerHTML = '';
+        document.getElementById('token-counter').textContent = '';
+
+        ws.send(JSON.stringify({
+            model: model,
+            prompt: prompt,
+            temperature: temp,
+            stream: true
+        }));
+    }
+
+    async function sendViaHTTP() {
+        const prompt = document.getElementById('prompt-input').value;
+        const model = document.getElementById('model-select').value;
+        const temp = parseFloat(document.getElementById('temp-range').value);
+
+        if(!prompt) return;
+
+        isProcessing = true;
+        setProxyUI('processing');
+        document.getElementById('output-text').textContent = '';
+        lastChunks = [];
+        tokenCount = { in: 0, out: 0 };
+        document.getElementById('stream-chunks').innerHTML = '';
+        document.getElementById('token-counter').textContent = '';
+        
+        try {
+            const res = await fetch(`${API_BASE}/api/generate`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    model: model, 
+                    prompt: prompt,
+                    temperature: temp,
+                    stream: true 
+                })
+            });
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+
+            while(true) {
+                const {done, value} = await reader.read();
+                if(done) break;
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n').filter(line => line.trim());
+
+                for(const line of lines) {
+                    try {
+                        const data = JSON.parse(line);
+                        
+                        if(data.response) {
+                            updateStreamChunks(data.response);
+                            const outputEl = document.getElementById('output-text');
+                            outputEl.textContent += data.response;
+                            document.getElementById('output-window').scrollTop = document.getElementById('output-window').scrollHeight;
+                        }
+                        
+                        if(data.done) {
+                            updateTokenCounter(data.prompt_eval_count || 0, data.eval_count || 0);
+                        }
+                    } catch(e) {
+                        console.error('Parse error:', e);
+                    }
+                }
+            }
+        } catch (e) { 
+            setProxyUI('error');
+            console.error('HTTP error:', e);
+        } finally {
+            isProcessing = false;
+            setTimeout(() => {
+                if(!document.getElementById('node-proxy').classList.contains('proxy-error')) {
+                    setProxyUI('active');
+                    lastChunks = [];
+                    document.getElementById('stream-chunks').innerHTML = '';
+                }
+            }, 2000);
+        }
+    }
+
+    document.getElementById('send-btn').onclick = () => {
+        if(useWebSocket) {
+            sendViaWebSocket();
+        } else {
+            sendViaHTTP();
+        }
+    };
+
+    // Mode toggle
+    document.getElementById('mode-ws').onclick = () => {
+        useWebSocket = true;
+        document.getElementById('mode-ws').classList.add('active');
+        document.getElementById('mode-http').classList.remove('active');
+        if(!ws || ws.readyState === WebSocket.CLOSED) initWebSocket();
+    };
+
+    document.getElementById('mode-http').onclick = () => {
+        useWebSocket = false;
+        document.getElementById('mode-http').classList.add('active');
+        document.getElementById('mode-ws').classList.remove('active');
+        if(ws) ws.close();
+    };
+
+    function drawThreads() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        const paths = [
+            {from: 'sock-in-out', to: 'sock-set-in', color: '#4ade80'},
+            {from: 'sock-set-out', to: 'sock-proxy-in', color: '#fbbf24'},
+            {from: 'sock-proxy-out', to: 'sock-model-in', color: '#3b82f6'},
+            {from: 'sock-model-out', to: 'sock-out-in', color: '#f472b6'}
+        ];
+
+        paths.forEach((p, idx) => {
+            const f = document.getElementById(p.from).getBoundingClientRect();
+            const t = document.getElementById(p.to).getBoundingClientRect();
+            const x1 = f.left + 6, y1 = f.top + 6, x2 = t.left + 6, y2 = t.top + 6;
+
+            const curvature = Math.min(Math.abs(x2 - x1) * 0.5, 100);
+
+            // Static wire shadow
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.bezierCurveTo(x1 + curvature, y1, x2 - curvature, y2, x2, y2);
+            ctx.strokeStyle = '#111'; ctx.lineWidth = 6; ctx.stroke();
+
+            // Colored wire
+            ctx.strokeStyle = p.color;
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = isProcessing ? 1.0 : 0.4;
+            ctx.stroke();
+            ctx.globalAlpha = 1.0;
+
+            // Dashed animation only when processing
+            if(isProcessing) {
+                ctx.setLineDash([5, 10]);
+                ctx.lineDashOffset = -threadOffset;
+                ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // Data balls - only show on last two paths when actually processing
+            if(isProcessing && idx >= 2) {
+                const ballCount = 3;
+                for(let b = 0; b < ballCount; b++) {
+                    const time = ((Date.now() * 0.0015) + (b / ballCount)) % 1;
+                    const inv = 1 - time;
+                    const cx1 = x1 + curvature, cx2 = x2 - curvature;
+                    const px = Math.pow(inv, 3) * x1 + 3 * Math.pow(inv, 2) * time * cx1 + 3 * inv * Math.pow(time, 2) * cx2 + Math.pow(time, 3) * x2;
+                    const py = Math.pow(inv, 3) * y1 + 3 * Math.pow(inv, 2) * time * y1 + 3 * inv * Math.pow(time, 2) * y2 + Math.pow(time, 3) * y2;
+                    
+                    ctx.fillStyle = "#ffffff";
+                    ctx.shadowBlur = 15; ctx.shadowColor = "#ffffff";
+                    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+            }
+        });
+
+        threadOffset += 1.5;
+        requestAnimationFrame(drawThreads);
+    }
+
+    // Draggable nodes
+    document.querySelectorAll('.node-header').forEach(h => {
+        h.onmousedown = (e) => {
+            let n = h.parentElement;
+            let ox = e.clientX - n.offsetLeft, oy = e.clientY - n.offsetTop;
+            document.onmousemove = (me) => {
+                n.style.left = (me.clientX - ox) + 'px';
+                n.style.top = (me.clientY - oy) + 'px';
+            };
+            document.onmouseup = () => document.onmousemove = null;
+        };
+    });
+
+    async function init() {
+        try {
+            const res = await fetch(`${API_BASE}/api/tags`);
+            const data = await res.json();
+            const select = document.getElementById('model-select');
+            select.innerHTML = '';
+            data.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.name; opt.textContent = m.name;
+                select.appendChild(opt);
+            });
+            setProxyUI('active');
+        } catch (e) { 
+            setProxyUI('error'); 
+            console.error('Init error:', e);
+        }
+    }
+
+    document.getElementById('temp-range').oninput = (e) => { 
+        document.getElementById('temp-val').textContent = e.target.value; 
+    };
+
+    init();
+    initWebSocket();
+    drawThreads();
+</script>
+</body>
+</html>
