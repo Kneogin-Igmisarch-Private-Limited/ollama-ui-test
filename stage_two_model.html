@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Stage: The Duel</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root { --bg: #050505; --panel: #111; --accent: #00f2ff; --text: #e0e0e0; }
+        body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        
+        /* Header & Controls */
+        header { background: var(--panel); padding: 20px; border-bottom: 1px solid #222; display: flex; gap: 20px; align-items: center; justify-content: center; }
+        .model-selector { display: flex; flex-direction: column; gap: 5px; }
+        select, textarea, button { background: #000; border: 1px solid #333; color: #fff; padding: 10px; border-radius: 5px; }
+        button { background: var(--accent); color: #000; font-weight: bold; cursor: pointer; border: none; }
+        button:hover { filter: brightness(1.2); }
+
+        /* The Stage Layout */
+        #stage { display: flex; flex: 1; overflow: hidden; gap: 2px; background: #222; }
+        .actor { flex: 1; background: var(--bg); display: flex; flex-direction: column; overflow: hidden; position: relative; }
+        .actor-header { padding: 10px; background: #151515; font-size: 0.7rem; letter-spacing: 2px; text-align: center; border-bottom: 1px solid #222; color: var(--accent); }
+        .actor-output { flex: 1; padding: 25px; overflow-y: auto; line-height: 1.6; }
+
+        /* Markdown Styling */
+        .actor-output h1 { color: var(--accent); font-size: 1.2rem; }
+        .actor-output pre { background: #111; padding: 15px; border-radius: 8px; border: 1px solid #333; overflow-x: auto; }
+        .actor-output code { color: #f2ff00; }
+
+        /* Status Effects */
+        .loading { opacity: 0.5; pointer-events: none; }
+        .thinking::after { content: '...'; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="model-selector">
+        <label style="font-size: 0.6rem">MODEL A</label>
+        <select id="select-a"><option>Loading...</option></select>
+    </div>
+    
+    <textarea id="main-prompt" placeholder="Enter one prompt for both models..." style="width: 400px; height: 40px;"></textarea>
+    
+    <button id="duel-btn">⚔️ START DUEL</button>
+
+    <div class="model-selector">
+        <label style="font-size: 0.6rem">MODEL B</label>
+        <select id="select-b"><option>Loading...</option></select>
+    </div>
+</header>
+
+<main id="stage">
+    <div class="actor" id="actor-a">
+        <div class="actor-header" id="label-a">MODEL A</div>
+        <div class="actor-output" id="out-a">Ready for input...</div>
+    </div>
+    <div class="actor" id="actor-b">
+        <div class="actor-header" id="label-b">MODEL B</div>
+        <div class="actor-output" id="out-b">Ready for input...</div>
+    </div>
+</main>
+
+<script>
+    const API_BASE = "http://localhost:11434/api/generate";
+
+    async function loadModels() {
+        try {
+            const res = await fetch("http://localhost:11434/api/tags");
+            const data = await res.json();
+            const selects = [document.getElementById('select-a'), document.getElementById('select-b')];
+            
+            selects.forEach((s, idx) => {
+                s.innerHTML = '';
+                data.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.name; opt.textContent = m.name;
+                    s.appendChild(opt);
+                });
+                // Default to first two different models if available
+                if(data.models[idx]) s.selectedIndex = idx;
+            });
+        } catch (e) {
+            console.error("Ollama not running?");
+        }
+    }
+
+    async function fetchResponse(model, prompt, outputId, labelId) {
+        const out = document.getElementById(outputId);
+        const label = document.getElementById(labelId);
+        
+        out.innerHTML = `<span class="thinking">Model is generating</span>`;
+        label.style.color = "#ffae00"; // Processing color
+
+        try {
+            const res = await fetch(API_BASE, {
+                method: 'POST',
+                body: JSON.stringify({ model, prompt, stream: false })
+            });
+            const data = await res.json();
+            out.innerHTML = marked.parse(data.response);
+            label.style.color = "var(--accent)";
+        } catch (e) {
+            out.innerHTML = "Error: Model failed to respond.";
+            label.style.color = "red";
+        }
+    }
+
+    document.getElementById('duel-btn').onclick = async () => {
+        const prompt = document.getElementById('main-prompt').value;
+        const modelA = document.getElementById('select-a').value;
+        const modelB = document.getElementById('select-b').value;
+        
+        if(!prompt) return;
+
+        // Trigger both requests simultaneously
+        await Promise.all([
+            fetchResponse(modelA, prompt, 'out-a', 'label-a'),
+            fetchResponse(modelB, prompt, 'out-b', 'label-b')
+        ]);
+    };
+
+    loadModels();
+</script>
+</body>
+</html>

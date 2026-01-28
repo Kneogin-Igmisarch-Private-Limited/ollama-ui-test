@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Infinite Canvas</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root { --bg: #0b0b0e; --panel: #1a1a1f; --accent: #7c3aed; --text: #e2e8f0; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg); font-family: sans-serif; }
+        
+        #world {
+            position: absolute;
+            width: 100%; height: 100%;
+            transform-origin: 0 0;
+            cursor: crosshair;
+        }
+
+        .grid-bg {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-image: radial-gradient(#2f2f35 1px, transparent 1px);
+            background-size: 40px 40px;
+            z-index: -1;
+        }
+
+        .node {
+            position: absolute;
+            width: 300px;
+            background: var(--panel);
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: var(--text);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            display: flex; flex-direction: column;
+            padding: 12px;
+            user-select: none;
+        }
+
+        .node:focus-within { border-color: var(--accent); box-shadow: 0 0 15px rgba(124, 58, 237, 0.3); }
+
+        textarea {
+            background: #000; border: 1px solid #444; color: #fff;
+            padding: 8px; border-radius: 4px; resize: none; font-size: 0.8rem;
+        }
+
+        .output {
+            margin-top: 10px; font-size: 0.85rem; max-height: 200px;
+            overflow-y: auto; border-top: 1px solid #333; padding-top: 10px;
+        }
+
+        button {
+            margin-top: 8px; background: var(--accent); border: none;
+            color: white; padding: 6px; border-radius: 4px; cursor: pointer;
+            font-weight: bold; font-size: 0.7rem;
+        }
+
+        canvas { position: fixed; top: 0; left: 0; pointer-events: none; z-index: 0; }
+        
+        .hint {
+            position: fixed; bottom: 20px; left: 20px;
+            background: rgba(0,0,0,0.7); color: #888;
+            padding: 10px; border-radius: 5px; font-size: 0.75rem; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="grid-bg" id="grid"></div>
+<canvas id="lines"></canvas>
+<div id="world"></div>
+
+<div class="hint">
+    <b>Double Click</b>: Create Node | <b>Space + Drag</b>: Pan Canvas
+</div>
+
+<script>
+    const world = document.getElementById('world');
+    const canvas = document.getElementById('lines');
+    const ctx = canvas.getContext('2d');
+    let nodes = [];
+    let offsetX = 0, offsetY = 0;
+    let isPanning = false;
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Infinite Canvas Panning Logic
+    window.addEventListener('keydown', (e) => { if(e.code === 'Space') isPanning = true; });
+    window.addEventListener('keyup', (e) => { if(e.code === 'Space') isPanning = false; });
+
+    window.addEventListener('mousedown', (e) => {
+        if (!isPanning) return;
+        let startX = e.clientX - offsetX;
+        let startY = e.clientY - offsetY;
+
+        function onMouseMove(me) {
+            offsetX = me.clientX - startX;
+            offsetY = me.clientY - startY;
+            updateWorldTransform();
+        }
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', () => window.removeEventListener('mousemove', onMouseMove), {once:true});
+    });
+
+    function updateWorldTransform() {
+        world.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+        document.getElementById('grid').style.backgroundPosition = `${offsetX}px ${offsetY}px`;
+        drawLines();
+    }
+
+    // Node Creation
+    world.addEventListener('dblclick', (e) => {
+        if(e.target !== world) return;
+        const x = e.clientX - offsetX;
+        const y = e.clientY - offsetY;
+        createNode(x - 150, y - 50);
+    });
+
+    function createNode(x, y, parentId = null) {
+        const id = 'node-' + Date.now();
+        const node = document.createElement('div');
+        node.className = 'node';
+        node.id = id;
+        node.style.left = x + 'px';
+        node.style.top = y + 'px';
+        
+        node.innerHTML = `
+            <div style="font-size: 0.6rem; opacity: 0.5; margin-bottom: 5px;">ID: ${id}</div>
+            <textarea placeholder="Ask something..."></textarea>
+            <button onclick="generate('${id}')">RUN INFERENCE</button>
+            <div class="output">...</div>
+        `;
+
+        // Draggable inside the world
+        node.onmousedown = (e) => {
+            if(e.target.tagName === 'TEXTAREA' || e.target.tagName === 'BUTTON') return;
+            let sx = e.clientX - node.offsetLeft;
+            let sy = e.clientY - node.offsetTop;
+            
+            function move(me) {
+                node.style.left = (me.clientX - sx) + 'px';
+                node.style.top = (me.clientY - sy) + 'px';
+                drawLines();
+            }
+            window.addEventListener('mousemove', move);
+            window.addEventListener('mouseup', () => window.removeEventListener('mousemove', move), {once:true});
+        };
+
+        world.appendChild(node);
+        nodes.push({ id, x, y, parentId });
+        drawLines();
+    }
+
+    async function generate(id) {
+        const nodeEl = document.getElementById(id);
+        const prompt = nodeEl.querySelector('textarea').value;
+        const outputEl = nodeEl.querySelector('.output');
+        
+        outputEl.innerHTML = "Thinking...";
+        
+        try {
+            const res = await fetch('http://localhost:11434/api/generate', {
+                method: 'POST',
+                body: JSON.stringify({ model: 'llama3', prompt, stream: false })
+            });
+            const data = await res.json();
+            outputEl.innerHTML = marked.parse(data.response);
+            
+            // Auto-spawn a child node for branching thoughts?
+            // createNode(parseInt(nodeEl.style.left) + 350, parseInt(nodeEl.style.top), id);
+        } catch (e) {
+            outputEl.innerHTML = "Error: Ollama not found.";
+        }
+    }
+
+    function drawLines() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Add link drawing logic here if implementing parent-child relationships
+    }
+
+    // Initial Node
+    createNode(window.innerWidth/2 - 150, window.innerHeight/2 - 100);
+</script>
+</body>
+</html>

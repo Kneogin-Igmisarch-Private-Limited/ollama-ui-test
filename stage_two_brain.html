@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Stage: Sequential Brains</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root { --bg: #0a0a0c; --panel: #16161a; --brain1: #7c3aed; --brain2: #06b6d4; --text: #f8fafc; }
+        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        
+        header { background: var(--panel); padding: 15px; border-bottom: 2px solid #222; display: flex; gap: 20px; align-items: center; justify-content: center; z-index: 10; }
+        .config { display: flex; align-items: center; gap: 10px; font-size: 0.8rem; }
+        select, textarea, button { background: #000; border: 1px solid #333; color: #fff; padding: 8px; border-radius: 4px; }
+        
+        #pipeline { display: flex; flex: 1; padding: 20px; gap: 20px; overflow: hidden; }
+        .brain-column { flex: 1; display: flex; flex-direction: column; background: var(--panel); border-radius: 12px; border: 1px solid #333; overflow: hidden; }
+        
+        .label { padding: 10px; font-weight: bold; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 2px; text-align: center; }
+        .output-box { flex: 1; padding: 20px; overflow-y: auto; font-size: 0.9rem; line-height: 1.6; }
+
+        /* Brain Specific Colors */
+        .b1 { border-top: 4px solid var(--brain1); } .b1 .label { color: var(--brain1); }
+        .b2 { border-top: 4px solid var(--brain2); } .b2 .label { color: var(--brain2); }
+
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; background: #333; }
+        .active-dot { background: var(--brain1); box-shadow: 0 0 10px var(--brain1); animation: pulse 1s infinite; }
+        
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="config">
+        <span>🧠 BRAIN 1 (The Planner)</span>
+        <select id="model-1"><option>Loading...</option></select>
+    </div>
+    
+    <textarea id="user-input" placeholder="Enter task (e.g. 'Write a recipe for space cake')" style="width: 300px; height: 35px;"></textarea>
+    
+    <button id="run-pipeline" style="background: var(--brain1); color: white;">RUN SEQUENTIAL FLOW</button>
+
+    <div class="config">
+        <span>🧠 BRAIN 2 (The Refiner)</span>
+        <select id="model-2"><option>Loading...</option></select>
+    </div>
+</header>
+
+<main id="pipeline">
+    <div class="brain-column b1">
+        <div class="label"><span id="dot-1" class="status-dot"></span> Brain 1: Drafting</div>
+        <div id="out-1" class="output-box">Waiting for Stage 1...</div>
+    </div>
+    
+    <div style="display: flex; align-items: center; justify-content: center; color: #444; font-size: 2rem;">➜</div>
+
+    <div class="brain-column b2">
+        <div class="label"><span id="dot-2" class="status-dot"></span> Brain 2: Final Polish</div>
+        <div id="out-2" class="output-box">Waiting for Stage 2...</div>
+    </div>
+</main>
+
+<script>
+    const API = "http://localhost:11434/api/generate";
+
+    async function setup() {
+        const res = await fetch("http://localhost:11434/api/tags");
+        const data = await res.json();
+        const s1 = document.getElementById('model-1'), s2 = document.getElementById('model-2');
+        s1.innerHTML = ''; s2.innerHTML = '';
+        data.models.forEach((m, i) => {
+            const opt = document.createElement('option');
+            opt.value = m.name; opt.textContent = m.name;
+            s1.appendChild(opt.cloneNode(true));
+            s2.appendChild(opt);
+        });
+        if(data.models.length > 1) s2.selectedIndex = 1;
+    }
+
+    document.getElementById('run-pipeline').onclick = async () => {
+        const input = document.getElementById('user-input').value;
+        if(!input) return;
+
+        // Reset UI
+        document.getElementById('out-1').innerHTML = "Processing...";
+        document.getElementById('out-2').innerHTML = "...";
+        document.getElementById('dot-1').classList.add('active-dot');
+
+        try {
+            // STAGE 1: The Brain 1 (Drafting)
+            const res1 = await fetch(API, {
+                method: 'POST',
+                body: JSON.stringify({ 
+                    model: document.getElementById('model-1').value, 
+                    prompt: `Research and draft a detailed response for: ${input}`, 
+                    stream: false 
+                })
+            });
+            const data1 = await res1.json();
+            const draft = data1.response;
+            document.getElementById('out-1').innerHTML = marked.parse(draft);
+            document.getElementById('dot-1').classList.remove('active-dot');
+
+            // STAGE 2: The Brain 2 (Refining)
+            document.getElementById('dot-2').classList.add('active-dot');
+            document.getElementById('out-2').innerHTML = "Refining Draft...";
+            
+            const res2 = await fetch(API, {
+                method: 'POST',
+                body: JSON.stringify({ 
+                    model: document.getElementById('model-2').value, 
+                    prompt: `Below is a raw draft for the task: "${input}". Please refine, format, and improve this draft into a professional final version. \n\nDraft:\n${draft}`, 
+                    stream: false 
+                })
+            });
+            const data2 = await res2.json();
+            document.getElementById('out-2').innerHTML = marked.parse(data2.response);
+            document.getElementById('dot-2').classList.remove('active-dot');
+
+        } catch (e) {
+            console.error(e);
+            alert("Connection error. Is Ollama running?");
+        }
+    };
+
+    setup();
+</script>
+</body>
+</html>
