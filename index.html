@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ComfyNode Continuous Flow Edition</title>
+    <title>ComfyNode Continuous Flow - Markdown Edition</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
             --bg-color: #0f0f0f;
@@ -52,20 +53,14 @@
             transition: border-color 0.4s, box-shadow 0.4s;
         }
 
-        /* --- OLLAMA PROXY STATES --- */
-        .proxy-active { 
-            border-color: var(--green) !important; 
-            box-shadow: 0 0 20px rgba(74, 222, 128, 0.2); 
-        }
+        /* Proxy States */
+        .proxy-active { border-color: var(--green) !important; box-shadow: 0 0 20px rgba(74, 222, 128, 0.2); }
         .proxy-processing { 
             border-color: var(--blue) !important; 
             box-shadow: 0 0 30px rgba(59, 130, 246, 0.6); 
             animation: pulse-border 1s infinite alternate;
         }
-        .proxy-error { 
-            border-color: var(--error) !important; 
-            box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); 
-        }
+        .proxy-error { border-color: var(--error) !important; box-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
 
         @keyframes pulse-border {
             from { box-shadow: 0 0 15px rgba(59, 130, 246, 0.4); }
@@ -96,27 +91,37 @@
             outline: none;
         }
 
-        button { 
-            background: #333; 
-            cursor: pointer; 
-            font-weight: bold; 
-            transition: 0.3s;
-            border: none;
-        }
+        button { background: #333; cursor: pointer; font-weight: bold; transition: 0.3s; border: none; }
         button:hover { background: var(--green); color: #000; box-shadow: 0 0 15px var(--green); }
 
+        /* Output Window & Markdown Styling */
         #output-window {
             background: #000;
-            min-height: 160px;
+            min-height: 200px;
+            max-height: 400px;
             padding: 15px;
-            font-family: 'Consolas', monospace;
+            font-family: 'Segoe UI', sans-serif;
             font-size: 0.9rem;
             border: 1px solid #222;
-            white-space: pre-wrap;
-            color: var(--green);
+            color: #ccc;
             position: relative;
-            overflow: hidden;
+            overflow-y: auto;
         }
+
+        #output-text h1, #output-text h2 { color: var(--green); margin-top: 0; }
+        #output-text code { background: #222; color: var(--gold); padding: 2px 4px; border-radius: 4px; font-family: monospace; }
+        #output-text pre { background: #111; padding: 10px; border-radius: 5px; overflow-x: auto; border-left: 3px solid var(--blue); }
+        #output-text blockquote { border-left: 3px solid var(--pink); margin-left: 0; padding-left: 15px; font-style: italic; }
+
+        #copy-btn {
+            position: absolute;
+            top: 5px; right: 5px;
+            padding: 4px 8px;
+            font-size: 0.6rem;
+            opacity: 0.6;
+            z-index: 10;
+        }
+        #copy-btn:hover { opacity: 1; }
 
         .scanline {
             display: none;
@@ -145,7 +150,7 @@
         #node-settings { top: 50px; left: 350px; width: 220px; }
         #node-proxy { top: 280px; left: 350px; width: 220px; }
         #node-model { top: 50px; left: 630px; width: 240px; }
-        #node-output { top: 50px; left: 930px; width: 400px; }
+        #node-output { top: 50px; left: 930px; width: 450px; }
     </style>
 </head>
 <body>
@@ -195,8 +200,9 @@
         <div class="node-header">Output Window</div>
         <div class="node-content">
             <div id="output-window">
+                <button id="copy-btn">COPY</button>
                 <div class="scanline" id="scanline"></div>
-                <span id="output-text">Waiting for input...</span>
+                <div id="output-text">Waiting for input...</div>
             </div>
         </div>
         <div class="socket left" id="sock-out-in"></div>
@@ -206,8 +212,10 @@
 <script>
     const canvas = document.getElementById('thread-canvas');
     const ctx = canvas.getContext('2d');
-    // const API_BASE = `http://${window.location.hostname}:8000`;
-    const API_BASE='http://127.0.0.1:8000';
+    
+    // Change :11434 to :8000 if using your custom proxy
+    const API_BASE = `http://${window.location.hostname || 'localhost'}:11434`;
+    
     let isProcessing = false;
     let threadOffset = 0;
 
@@ -227,7 +235,7 @@
             scan.style.display = 'none';
         } else if(state === 'processing') {
             node.classList.add('proxy-processing');
-            txt.textContent = "WAITING FOR RESPONSE"; txt.style.color = 'var(--blue)';
+            txt.textContent = "PROCESSING"; txt.style.color = 'var(--blue)';
             scan.style.display = 'block';
         } else {
             node.classList.add('proxy-error');
@@ -236,95 +244,101 @@
         }
     }
 
+    // Markdown Processing Logic
     document.getElementById('send-btn').onclick = async () => {
         const prompt = document.getElementById('prompt-input').value;
         if(!prompt) return;
 
         isProcessing = true;
         setProxyUI('processing');
-        document.getElementById('output-text').textContent = "Waiting for response...";
+        document.getElementById('output-text').innerHTML = "<em>Accessing neural nodes...</em>";
         
         try {
             const res = await fetch(`${API_BASE}/api/generate`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ model: document.getElementById('model-select').value, prompt, stream: false })
+                body: JSON.stringify({ 
+                    model: document.getElementById('model-select').value, 
+                    prompt, 
+                    stream: false,
+                    options: { temperature: parseFloat(document.getElementById('temp-range').value) }
+                })
             });
             const data = await res.json();
-            document.getElementById('output-text').textContent = data.response;
+            
+            // Render Markdown
+            document.getElementById('output-text').innerHTML = marked.parse(data.response);
+            
         } catch (e) { 
             setProxyUI('error');
+            document.getElementById('output-text').textContent = "Connection Error: Ensure Ollama is running.";
         } finally {
             isProcessing = false;
             if(!document.getElementById('node-proxy').classList.contains('proxy-error')) setProxyUI('active');
         }
     };
 
+    // Copy to Clipboard
+    document.getElementById('copy-btn').onclick = () => {
+        const text = document.getElementById('output-text').innerText;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('copy-btn');
+            btn.textContent = "COPIED!";
+            setTimeout(() => btn.textContent = "COPY", 2000);
+        });
+    };
+
     function drawThreads() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // Define paths with their specific colors
         const paths = [
-            {from: 'sock-in-out', to: 'sock-set-in', color: '#4ade80'},  // Green
-            {from: 'sock-set-out', to: 'sock-proxy-in', color: '#fbbf24'}, // Gold
-            {from: 'sock-proxy-out', to: 'sock-model-in', color: '#3b82f6'}, // Blue
-            {from: 'sock-model-out', to: 'sock-out-in', color: '#f472b6'}  // Pink
+            {from: 'sock-in-out', to: 'sock-set-in', color: '#4ade80'},
+            {from: 'sock-set-out', to: 'sock-proxy-in', color: '#fbbf24'},
+            {from: 'sock-proxy-out', to: 'sock-model-in', color: '#3b82f6'},
+            {from: 'sock-model-out', to: 'sock-out-in', color: '#f472b6'}
         ];
 
         paths.forEach((p, idx) => {
-            const f = document.getElementById(p.from).getBoundingClientRect();
-            const t = document.getElementById(p.to).getBoundingClientRect();
-            const x1 = f.left + 6, y1 = f.top + 6, x2 = t.left + 6, y2 = t.top + 6;
+            const fEl = document.getElementById(p.from);
+            const tEl = document.getElementById(p.to);
+            if(!fEl || !tEl) return;
 
+            const f = fEl.getBoundingClientRect();
+            const t = tEl.getBoundingClientRect();
+            const x1 = f.left + 6, y1 = f.top + 6, x2 = t.left + 6, y2 = t.top + 6;
             const curvature = Math.min(Math.abs(x2 - x1) * 0.5, 100);
 
-            // 1. Draw Static Wire Shadow
             ctx.beginPath();
             ctx.moveTo(x1, y1);
             ctx.bezierCurveTo(x1 + curvature, y1, x2 - curvature, y2, x2, y2);
             ctx.strokeStyle = '#111'; ctx.lineWidth = 6; ctx.stroke();
-
-            // 2. Draw Colored Wire
-            ctx.strokeStyle = p.color;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = isProcessing ? 1.0 : 0.4;
-            ctx.stroke();
+            ctx.strokeStyle = p.color; ctx.lineWidth = 2; ctx.globalAlpha = isProcessing ? 1.0 : 0.4; ctx.stroke();
             ctx.globalAlpha = 1.0;
 
-            // 3. Thread Animation (Dashed Lines)
             if(isProcessing) {
                 ctx.setLineDash([5, 10]);
                 ctx.lineDashOffset = -threadOffset;
                 ctx.strokeStyle = 'rgba(255,255,255,0.4)';
                 ctx.stroke();
                 ctx.setLineDash([]);
-            }
-
-            // 4. CONTINUOUS WHITE DATA BALL (Proxy to Output only)
-            // We only show the data balls for paths index 2 (Proxy->Model) and index 3 (Model->Output)
-            if(isProcessing && idx >= 2) {
-                // We create 2 balls per segment for a continuous stream feel
-                const ballCount = 2;
-                for(let b = 0; b < ballCount; b++) {
-                    const time = ((Date.now() * 0.0012) + (b / ballCount)) % 1;
-                    const inv = 1 - time;
-                    const cx1 = x1 + curvature, cx2 = x2 - curvature;
-                    const px = Math.pow(inv, 3) * x1 + 3 * Math.pow(inv, 2) * time * cx1 + 3 * inv * Math.pow(time, 2) * cx2 + Math.pow(time, 3) * x2;
-                    const py = Math.pow(inv, 3) * y1 + 3 * Math.pow(inv, 2) * time * y1 + 3 * inv * Math.pow(time, 2) * y2 + Math.pow(time, 3) * y2;
-                    
-                    ctx.fillStyle = "#ffffff";
-                    ctx.shadowBlur = 15; ctx.shadowColor = "#ffffff";
-                    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
-                    ctx.shadowBlur = 0;
+                
+                if(idx >= 2) {
+                    for(let b = 0; b < 2; b++) {
+                        const time = ((Date.now() * 0.0012) + (b / 2)) % 1;
+                        const inv = 1 - time;
+                        const px = Math.pow(inv, 3) * x1 + 3 * Math.pow(inv, 2) * time * (x1 + curvature) + 3 * inv * Math.pow(time, 2) * (x2 - curvature) + Math.pow(time, 3) * x2;
+                        const py = Math.pow(inv, 3) * y1 + 3 * Math.pow(inv, 2) * time * y1 + 3 * inv * Math.pow(time, 2) * y2 + Math.pow(time, 3) * y2;
+                        ctx.fillStyle = "#fff"; ctx.shadowBlur = 10; ctx.shadowColor = "#fff";
+                        ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI*2); ctx.fill();
+                        ctx.shadowBlur = 0;
+                    }
                 }
             }
         });
-
         threadOffset += 1.5;
         requestAnimationFrame(drawThreads);
     }
 
-    // Draggable Logic
+    // Draggable
     document.querySelectorAll('.node-header').forEach(h => {
         h.onmousedown = (e) => {
             let n = h.parentElement;
